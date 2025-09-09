@@ -1,82 +1,79 @@
-import os
+#!/usr/bin/env python3
+"""
+CSV Sentiment Analyzer
+Reads INPUT_FILE from .env, analyzes 'Coffee D - Notes' column,
+and updates the same CSV file with a new sentiment column
+"""
+
 import pandas as pd
-from textblob import TextBlob
+import warnings
+import os
+from transformers import pipeline
 from dotenv import load_dotenv
 
-# ------------------------
-# 1. Load environment variables
-# ------------------------
+warnings.filterwarnings("ignore")
+
+# Load .env variables
 load_dotenv()
+INPUT_FILE = os.getenv("INPUT_FILE", "").strip()
 
-# Get file paths from .env (safer than hardcoding)
-INPUT_FILE = os.getenv("INPUT_FILE")
-OUTPUT_FILE = os.getenv("OUTPUT_FILE", "results_with_sentiment.csv")
+class SentimentAnalyzer:
+    """Simple sentiment analyzer for user notes"""
 
-if not INPUT_FILE or not os.path.exists(INPUT_FILE):
-    raise FileNotFoundError("Input file not found. Check INPUT_FILE in your .env")
+    def __init__(self):
+        print("Loading sentiment analysis model...")
+        try:
+            self.sentiment_pipeline = pipeline(
+                "sentiment-analysis",
+                model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+                device=-1,
+                truncation=True,
+                max_length=512
+            )
+            print("Model loaded successfully!")
+        except Exception:
+            print("Using fallback model...")
+            self.sentiment_pipeline = pipeline("sentiment-analysis")
+            print("Fallback model loaded!")
 
-# ------------------------
-# 2. Load dataset safely
-# ------------------------
-df = pd.read_csv(INPUT_FILE)
-print(f"Dataset loaded successfully with {len(df)} rows")
-print(f"Available columns: {list(df.columns)}")
-
-# ------------------------
-# 3. Sentiment Analysis Function
-# ------------------------
-def get_sentiment(text: str) -> str:
-    """
-    Analyze sentiment of text safely and return classification
-    """
-    if pd.isna(text) or not str(text).strip():
-        return "Neutral"
-
-    try:
-        polarity = TextBlob(str(text)).sentiment.polarity
-
-        # Configurable thresholds
-        POS_THRESHOLD = float(os.getenv("POS_THRESHOLD", 0.1))
-        NEG_THRESHOLD = float(os.getenv("NEG_THRESHOLD", -0.1))
-
-        if polarity > POS_THRESHOLD:
-            return "Positive"
-        elif polarity < NEG_THRESHOLD:
-            return "Negative"
-        else:
+    def analyze_text(self, text):
+        """Analyze sentiment of a single text and return 'Positive', 'Negative', or 'Neutral'"""
+        if pd.isna(text) or not str(text).strip():
+            return "Neutral"
+        try:
+            clean_text = str(text).strip()[:500]
+            result = self.sentiment_pipeline(clean_text)[0]
+            label = result["label"].upper()
+            if label in ["POSITIVE", "POS"]:
+                return "Positive"
+            elif label in ["NEGATIVE", "NEG"]:
+                return "Negative"
+            else:
+                return "Neutral"
+        except Exception:
             return "Neutral"
 
-    except Exception:
-        # Do not expose original text or raw error
-        return "Neutral"
+    def analyze_csv_inplace(self, input_file):
+        """Analyze 'Coffee D - Notes' column in the CSV and save changes to the same file"""
+        if not os.path.exists(input_file):
+            print(f"File not found: {input_file}")
+            return None
 
-# ------------------------
-# 4. Process Coffee Notes Columns
-# ------------------------
-note_columns = [col for col in df.columns if "note" in col.lower() and "coffee" in col.lower()]
+        df = pd.read_csv(input_file)
 
-if not note_columns:
-    print("No columns with 'coffee' and 'note' found!")
-else:
-    for col in note_columns:
-        sentiment_col_name = f"{col.replace(' ', '_').replace('-', '_')}_Sentiment"
-        print(f"Processing column: {col}")
-        df[sentiment_col_name] = df[col].apply(get_sentiment)
+        target_col = "Coffee D - Notes"
+        if target_col not in df.columns:
+            print(f"Column '{target_col}' not found in CSV!")
+            print(f"Available columns: {list(df.columns)}")
+            return df
 
-        # Show sentiment distribution
-        print(f"Sentiment distribution for {col}:")
-        print(df[sentiment_col_name].value_counts())
+        # Analyze the column and add a new sentiment column
+        df[f"{target_col}_Sentiment"] = [self.analyze_text(text) for text in df[target_col]]
 
-# ------------------------
-# 5. Save results securely
-# ------------------------
-# Never overwrite the original file
-df.to_csv(OUTPUT_FILE, index=False)
-print(f"Results saved to: {OUTPUT_FILE}")
+        # Save changes to the same file
+        df.to_csv(input_file, index=False)
+        print(f"File updated successfully with new column: '{target_col}_Sentiment'")
+        return df
 
-# ------------------------
-# 6. Summary
-# ------------------------
-print(f"Final dataset has {len(df)} rows and {len(df.columns)} columns")
-sentiment_columns = [col for col in df.columns if "sentiment" in col.lower()]
-print(f"Sentiment columns created: {sentiment_columns}")
+
+
